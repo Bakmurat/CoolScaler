@@ -1,0 +1,64 @@
+{{- if .Values.networkMonitor.enabled -}}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: coolscaler-network-monitor
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-monitor
+spec:
+  selector:
+    matchLabels:
+      {{- include "coolscaler.selector" (dict "ctx" . "component" "network-monitor") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "coolscaler.selector" (dict "ctx" . "component" "network-monitor") | nindent 8 }}
+        {{- include "coolscaler.podSafetyLabels" . | nindent 8 }}
+      annotations:
+        # Scraped by the bundled Prometheus (coolscaler-components job).
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
+        coolscaler.prometheus.io/scrape: "true"
+        coolscaler.prometheus.io/port: "8742"
+        coolscaler.prometheus.io/path: /coolscaler_network_metrics
+    spec:
+      serviceAccountName: {{ include "coolscaler.serviceAccountName" . }}
+      {{- include "coolscaler.priorityClassName" $ | nindent 6 }}
+      {{- include "coolscaler.podSafety" . | nindent 6 }}
+      securityContext: { runAsNonRoot: true, runAsUser: 1000 }
+      hostPID: true
+      terminationGracePeriodSeconds: 5
+      tolerations:
+        - operator: Exists      # run on every node, incl. control-plane
+      volumes:
+        - name: host-proc
+          hostPath: { path: /proc, type: Directory }
+      containers:
+        - name: network-monitor
+          image: {{ include "coolscaler.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # The Go netmon ALSO serves the same handler on:8080 (PORT) so the legacy
+          # prometheus.io annotations keep working.
+          command:
+            - /coolscaler
+            - network-monitor
+            - --metrics-bind-address=:8742
+            - --health-probe-bind-address=:8743
+            - --zap-log-level=error
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: metrics, containerPort: 8742 }
+            - { name: probes, containerPort: 8743 }
+          env:
+            - { name: GOGC, value: "75" }
+            - name: NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+            {{- include "coolscaler.commonEnv" . | nindent 12 }}
+          volumeMounts:
+            - { name: host-proc, mountPath: /host/proc, readOnly: true }
+          readinessProbe: { httpGet: { path: /readyz, port: probes }, initialDelaySeconds: 5, periodSeconds: 15 }
+          livenessProbe: { httpGet: { path: /healthz, port: probes }, initialDelaySeconds: 15, periodSeconds: 10, timeoutSeconds: 15, failureThreshold: 8 }
+          resources: {{- toYaml .Values.networkMonitor.resources | nindent 12 }}
+{{- end }}

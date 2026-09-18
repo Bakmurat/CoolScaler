@@ -1,0 +1,325 @@
+{{- $img := include "coolscaler.image" . -}}
+{{- $sa := include "coolscaler.serviceAccountName" . -}}
+# ============================ recommender ============================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coolscaler-recommender
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+    app.kubernetes.io/component: recommender
+spec:
+  replicas: {{ .Values.recommender.replicas }}
+  {{- if .Values.recommender.persistence.enabled }}
+  strategy: { type: Recreate }   # RWO analytics PVC — old pod must release before new mounts
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "coolscaler.selector" (dict "ctx" . "component" "recommender") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "coolscaler.selector" (dict "ctx" . "component" "recommender") | nindent 8 }}
+        {{- include "coolscaler.managedUnevictableLabels" . | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+        {{- include "coolscaler.managedUnevictableAnnotations" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $sa }}
+      {{- include "coolscaler.priorityClassName" $ | nindent 6 }}
+      {{- include "coolscaler.managedUnevictable" . | nindent 6 }}
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, fsGroup: 1000 }
+      containers:
+        - name: recommender
+          image: {{ $img }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Single multi-call Go binary, subcommand-dispatched.
+          command:
+            - /coolscaler
+            - recommendation
+            - --health-probe-bind-address=:9999
+            - --metrics-bind-address=:8080
+            - --max-concurrent-reconciles=5
+            - --feature-gates=CheckArmSupport=false
+            - --leader-elect
+            - --zap-log-level=error
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: probes, containerPort: 9999 }
+          env:
+            - { name: GOGC, value: "70" }
+            {{- if .Values.recommender.persistence.enabled }}
+            - { name: ANALYTICS_FILE, value: /data/analytics.json }
+            {{- end }}
+            {{- include "coolscaler.commonEnv" . | nindent 12 }}
+          readinessProbe: { httpGet: { path: /readyz, port: probes }, initialDelaySeconds: 5, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /healthz, port: probes }, initialDelaySeconds: 15, periodSeconds: 20, failureThreshold: 8 }
+          resources: {{- toYaml .Values.recommender.resources | nindent 12 }}
+          {{- if .Values.recommender.persistence.enabled }}
+          volumeMounts:
+            - { name: data, mountPath: /data }
+          {{- end }}
+      {{- if .Values.recommender.persistence.enabled }}
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: coolscaler-recommender-data }
+      {{- end }}
+{{- if .Values.recommender.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: coolscaler-recommender-data
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.recommender.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.recommender.persistence.size }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: coolscaler-recommender
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+    app.kubernetes.io/component: recommender
+spec:
+  selector:
+    {{- include "coolscaler.selector" (dict "ctx" . "component" "recommender") | nindent 4 }}
+  ports: [{ name: http, port: 8080, targetPort: http }]
+---
+# ============================ dashboards ============================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coolscaler-dashboards
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboards
+spec:
+  replicas: {{ .Values.dashboards.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "coolscaler.selector" (dict "ctx" . "component" "dashboards") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "coolscaler.selector" (dict "ctx" . "component" "dashboards") | nindent 8 }}
+        {{- include "coolscaler.podSafetyLabels" . | nindent 8 }}
+        coolscaler.sh/authProvider: none
+        coolscaler.sh/rbacEnabled: "false"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: {{ $sa }}
+      {{- include "coolscaler.priorityClassName" $ | nindent 6 }}
+      {{- include "coolscaler.podSafety" . | nindent 6 }}
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, fsGroup: 1000 }
+      containers:
+        - name: dashboards
+          image: {{ $img }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /coolscaler
+            - dashboard-api
+            - --static
+            - /build
+            - --log_level=error
+          # Istio does).
+          ports:
+            - { name: dashboard, containerPort: 8080 }
+            - { name: internal, containerPort: 18080 }
+          env:
+            - { name: GIN_MODE, value: release }
+            - { name: COOLSCALER_WORKER_SA_NAME, value: coolscaler-worker }
+            {{- include "coolscaler.commonEnv" . | nindent 12 }}
+          readinessProbe: { httpGet: { path: /ping, port: dashboard }, initialDelaySeconds: 5, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /ping, port: dashboard }, initialDelaySeconds: 15, periodSeconds: 20, failureThreshold: 8 }
+          resources: {{- toYaml .Values.dashboards.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: coolscaler-dashboards
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboards
+spec:
+  type: {{ .Values.dashboards.service.type }}
+  selector:
+    {{- include "coolscaler.selector" (dict "ctx" . "component" "dashboards") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.dashboards.service.port }}
+      targetPort: dashboard
+      {{- if and (eq .Values.dashboards.service.type "NodePort") .Values.dashboards.service.nodePort }}
+      nodePort: {{ .Values.dashboards.service.nodePort }}
+      {{- end }}
+---
+# Internal ClusterIP for in-cluster API callers, so other components reach the
+# dashboards/API without going through the public NodePort/Istio path.
+apiVersion: v1
+kind: Service
+metadata:
+  name: coolscaler-dashboards-internal
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboards
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "coolscaler.selector" (dict "ctx" . "component" "dashboards") | nindent 4 }}
+  ports:
+    - { name: internal, port: 8080, targetPort: internal }
+{{- if .Values.agent.enabled }}
+---
+# ============================ agent ============================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coolscaler-agent
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+spec:
+  replicas: 1
+  strategy: { type: Recreate }   # singleton mutator — never two agents at once
+  selector:
+    matchLabels:
+      {{- include "coolscaler.selector" (dict "ctx" . "component" "agent") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "coolscaler.selector" (dict "ctx" . "component" "agent") | nindent 8 }}
+        {{- include "coolscaler.podSafetyLabels" . | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: {{ $sa }}
+      {{- include "coolscaler.priorityClassName" $ | nindent 6 }}
+      {{- include "coolscaler.podSafety" . | nindent 6 }}
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, fsGroup: 1000 }
+      containers:
+        - name: agent
+          image: {{ $img }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /coolscaler
+            - agent
+            - --health-probe-bind-address=:9999
+            - --update-crd=true
+            - --leader-elect
+            - --zap-log-level=error
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: probes, containerPort: 9999 }
+          env:
+            - { name: COOLSCALER_WORKER_SA_NAME, value: coolscaler-worker }
+            {{- include "coolscaler.commonEnv" . | nindent 12 }}
+          readinessProbe: { httpGet: { path: /readyz, port: probes }, initialDelaySeconds: 5, periodSeconds: 15 }
+          livenessProbe: { httpGet: { path: /healthz, port: probes }, initialDelaySeconds: 15, periodSeconds: 10, timeoutSeconds: 15, failureThreshold: 8 }
+          resources: {{- toYaml .Values.agent.resources | nindent 12 }}
+---
+# Agent service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: coolscaler-agent
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+  annotations:
+    prometheus.io/port: "8080"
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "coolscaler.selector" (dict "ctx" . "component" "agent") | nindent 4 }}
+  ports:
+    - { name: agent, port: 8089, targetPort: http }
+    - { name: metrics, port: 8080, targetPort: http }
+{{- end }}
+{{- if .Values.updater.enabled }}
+---
+# ============================ updater ============================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coolscaler-updater
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+    app.kubernetes.io/component: updater
+spec:
+  replicas: 1
+  strategy: { type: Recreate }   # singleton mutator — never two updaters at once
+  selector:
+    matchLabels:
+      {{- include "coolscaler.selector" (dict "ctx" . "component" "updater") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "coolscaler.selector" (dict "ctx" . "component" "updater") | nindent 8 }}
+        {{- include "coolscaler.podSafetyLabels" . | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: {{ $sa }}
+      {{- include "coolscaler.priorityClassName" $ | nindent 6 }}
+      {{- include "coolscaler.podSafety" . | nindent 6 }}
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, fsGroup: 1000 }
+      containers:
+        - name: updater
+          image: {{ $img }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /coolscaler
+            - updater
+            - --health-probe-bind-address=:8081
+            - --leader-elect
+            - --zap-log-level=error
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: api, containerPort: 8082 }
+            - { name: probes, containerPort: 8081 }
+          env:
+            - { name: UPDATER_INTERVAL_SECONDS, value: {{ .Values.updater.intervalSeconds | quote }} }
+            {{- include "coolscaler.commonEnv" . | nindent 12 }}
+          readinessProbe: { httpGet: { path: /readyz, port: probes }, initialDelaySeconds: 5, periodSeconds: 15 }
+          livenessProbe: { httpGet: { path: /healthz, port: probes }, initialDelaySeconds: 15, periodSeconds: 10, timeoutSeconds: 15, failureThreshold: 8 }
+          resources: {{- toYaml .Values.updater.resources | nindent 12 }}
+---
+# Updater API service — dashboards/recommender POST /apply|/reconcile here to
+# trigger an apply without waiting for the poll loop.
+apiVersion: v1
+kind: Service
+metadata:
+  name: coolscaler-updater
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+    app.kubernetes.io/component: updater
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "coolscaler.selector" (dict "ctx" . "component" "updater") | nindent 4 }}
+  ports:
+    - { name: api, port: 8082, targetPort: api }
+    - { name: metrics, port: 8080, targetPort: http }
+{{- end }}

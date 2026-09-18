@@ -1,0 +1,36 @@
+# PodSchedulingPolicy — Pod Scheduling (Beta): self anti-affinity relaxation.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: podschedulingpolicies.analysis.coolscaler.sh
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  labels:
+    app.kubernetes.io/name: coolscaler
+    app.kubernetes.io/part-of: coolscaler
+spec:
+  group: analysis.coolscaler.sh
+  scope: Namespaced
+  conversion:
+    strategy: None
+  names:
+    plural: podschedulingpolicies
+    singular: podschedulingpolicy
+    kind: PodSchedulingPolicy
+    listKind: PodSchedulingPolicyList
+    shortNames: [podschedulingpolicy]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+              properties:
+                selfAntiAffinityOptimization:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true

@@ -1,0 +1,11 @@
+# Static ignored-namespaces list
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coolscaler-static-ignored-namespaces
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+data:
+  namespaces: |
+    ["kube-system","kube-public","kube-node-lease","openshift.*","trident","cluster-autoscaler"]

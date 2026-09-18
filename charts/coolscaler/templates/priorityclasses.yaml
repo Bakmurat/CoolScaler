@@ -1,0 +1,38 @@
+{{- if .Values.priorityClasses.create }}
+# PriorityClasses
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: coolscaler-internal
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+value: {{ .Values.priorityClasses.critical.value }}
+globalDefault: false
+preemptionPolicy: Never
+description: "CoolScaler default control-plane priority: high value, never preempts others."
+---
+# PreemptLowerPriority variant — for pods that must schedule even on a full node
+# (e.g. the network-monitor DaemonSet).
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: coolscaler-critical
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+value: {{ .Values.priorityClasses.critical.value }}
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: "CoolScaler control-plane priority — keeps recommender/updater/webhook scheduled."
+---
+# (preemptionPolicy is immutable on an existing PriorityClass, so this stays Never.)
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: coolscaler-overprovisioning
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+value: {{ .Values.priorityClasses.overprovisioning.value }}
+globalDefault: false
+preemptionPolicy: Never
+description: "CoolScaler over-provisioning (headroom) priority — preempted first to free capacity."
+{{- end }}

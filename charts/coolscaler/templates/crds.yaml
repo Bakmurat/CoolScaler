@@ -1,0 +1,598 @@
+# CoolScaler CRDs
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: policies.analysis.coolscaler.sh
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+spec:
+  group: analysis.coolscaler.sh
+  scope: Namespaced
+  conversion:
+    strategy: None
+  names:
+    kind: Policy
+    listKind: PolicyList
+    plural: policies
+    singular: policy
+    shortNames: ["policy"]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+              properties:
+                type:
+                  type: string
+                  enum: ["Optimize", "Schedule"]
+                  default: "Optimize"
+                window:
+                  type: string
+                  default: "24h"
+                requestsConfigs:
+                  type: object
+                  properties:
+                    cpu:
+                      type: object
+                      properties:
+                        percentilePercentage: { type: integer, default: 93 }
+                        headroomPercentage: { type: integer, default: 10 }
+                        minAllowed: { type: string, default: "10m" }
+                        maxAllowed: { type: string, default: "4" }
+                    memory:
+                      type: object
+                      properties:
+                        percentilePercentage: { type: integer, default: 93 }
+                        headroomPercentage: { type: integer, default: 5 }
+                        minAllowed: { type: string, default: "16Mi" }
+                        maxAllowed: { type: string, default: "8Gi" }
+                hpa:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                  default: { manageHPA: true }
+                  properties:
+                    manageHPA: { type: boolean, default: true }
+                policyOptimize:
+                  type: object
+                  # preserve nested extras (fastReaction, scaleOutPolicy, …)
+                  x-kubernetes-preserve-unknown-fields: true
+                  properties:
+                    rightSizePolicy:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                      properties:
+                        nodeCappingPolicy:
+                          type: object
+                          x-kubernetes-preserve-unknown-fields: true
+                          properties:
+                            nodeCappingAuto: { type: boolean, default: true }
+                updatePolicy:
+                  type: object
+                  # preserve nested extras (inPlace, updateByTypeMode, evictionSchedule)
+                  x-kubernetes-preserve-unknown-fields: true
+                  properties:
+                    updateMode:
+                      type: string
+                      enum: ["Ongoing", "OnCreate", "Inplace"]
+                      default: "Ongoing"
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: recommendations.analysis.coolscaler.sh
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+spec:
+  group: analysis.coolscaler.sh
+  scope: Namespaced
+  conversion:
+    strategy: None
+  names:
+    kind: Recommendation
+    listKind: RecommendationList
+    plural: recommendations
+    singular: recommendation
+    shortNames: ["recommend"]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources: {}
+      additionalPrinterColumns:
+        - { name: Policy, type: string, jsonPath: .spec.policyName, priority: 1, description: "Rightsize policy name" }
+        - { name: Auto, type: boolean, jsonPath: .spec.optimize, priority: 1, description: "Rightsize automation enabled" }
+        - { name: ReplicasPolicy, type: string, jsonPath: .spec.hpaPolicyName, priority: 1, description: "Scale-out policy name" }
+        - { name: ReplicasAuto, type: boolean, jsonPath: .spec.scaleOutOptimize, priority: 1, description: "Scale-out automation enabled" }
+        - { name: GpuPolicy, type: string, jsonPath: .spec.gpuPolicyName, priority: 1, description: "GPU policy name" }
+        - { name: GpuMemoryPolicy, type: string, jsonPath: .spec.gpuMemoryPolicyName, priority: 1, description: "GPU memory policy name" }
+        - { name: GpuAuto, type: boolean, jsonPath: .spec.gpuOptimize, priority: 1, description: "GPU automation enabled" }
+        - { name: SpotPolicy, type: string, jsonPath: .spec.spotOptimizationPolicy, priority: 1, description: "Spot optimization policy name" }
+        - { name: SpotAuto, type: boolean, jsonPath: .spec.spotOptimizationOptimize, priority: 1, description: "Spot automation enabled" }
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+              required: ["automationExcluded", "targetRef"]
+              properties:
+                targetRef:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                  properties:
+                    kind: { type: string }
+                    name: { type: string }
+                    namespace: { type: string }
+                    apiVersion: { type: string }
+                policyName: { type: string }
+                optimize: { type: boolean, default: false }
+                automationExcluded: { type: boolean, default: false }
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+# HPAPolicy — Replicas Optimization policy: minReplicas strategy by
+# general/predictable workloads + prediction (look-ahead) + CPU threshold
+# optimization.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: hpapolicies.analysis.coolscaler.sh
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+spec:
+  group: analysis.coolscaler.sh
+  scope: Namespaced
+  conversion:
+    strategy: None
+  names:
+    plural: hpapolicies
+    singular: hpapolicy
+    kind: HPAPolicy
+    listKind: HPAPolicyList
+    shortNames: [hpapolicy]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+              properties:
+                policyOptimize:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                updatePolicy:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+---
+# PodSchedulingPolicy — Pod Scheduling (Beta): self anti-affinity relaxation.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: podschedulingpolicies.analysis.coolscaler.sh
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+spec:
+  group: analysis.coolscaler.sh
+  scope: Namespaced
+  conversion:
+    strategy: None
+  names:
+    plural: podschedulingpolicies
+    singular: podschedulingpolicy
+    kind: PodSchedulingPolicy
+    listKind: PodSchedulingPolicyList
+    shortNames: [podschedulingpolicy]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+              properties:
+                selfAntiAffinityOptimization:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+---
+# SpotPolicy — spot-suitability automation: how aggressively a workload is
+# moved to spot capacity, with an on-demand floor and PDB-aware fallback.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: spotpolicies.analysis.coolscaler.sh
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+spec:
+  group: analysis.coolscaler.sh
+  scope: Namespaced
+  conversion:
+    strategy: None
+  names:
+    kind: SpotPolicy
+    listKind: SpotPolicyList
+    plural: spotpolicies
+    singular: spotpolicy
+    shortNames: [spotpolicy]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+              properties:
+                targetSpotOptimizationPercentage: { type: integer, default: 0 }
+                minimumPodsOnOnDemandNodes: { type: integer, default: 1 }
+                fallbackToOd: { type: boolean, default: true }
+                supportWorkloadsWithPdb: { type: boolean, default: true }
+                keep: { type: boolean }
+                enableSparkDecommissionArgsInjection: { type: boolean, default: false }
+---
+# DownscalerPolicy — scheduled downscale / sleep windows: drop replicas during off-hours
+# by a weekly schedule, restoring them outside the window.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: downscalerpolicies.analysis.coolscaler.sh
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+spec:
+  group: analysis.coolscaler.sh
+  scope: Namespaced
+  conversion:
+    strategy: None
+  names:
+    kind: DownscalerPolicy
+    listKind: DownscalerPolicyList
+    plural: downscalerpolicies
+    singular: downscalerpolicy
+    shortNames: [dspolicy]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+              required: ["name"]
+              x-kubernetes-validations:
+                - rule: "!has(self.sleep) || !self.sleep || !has(self.replicas) || self.replicas == 0"
+                  message: "replicas must be 0 when sleep is enabled"
+                - rule: "!has(self.minReplicas) || self.minReplicas >= 1"
+                  message: "minReplicas must be at least 1"
+              properties:
+                name: { type: string }
+                replicas: { type: integer }
+                minReplicas: { type: integer }
+                sleep: { type: boolean }
+                hpaEnabled: { type: boolean }
+                nonHpaEnabled: { type: boolean }
+                schedule:
+                  type: array
+                  items:
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                    properties:
+                      weeklyConfig:
+                        type: object
+                        properties:
+                          beginTime: { type: string }
+                          endTime: { type: string }
+                          days:
+                            type: array
+                            items: { type: integer }
+---
+# AutomatedNamespace — per-namespace automation defaults: the default policy + automate
+# toggle for each optimization product applied to a whole namespace.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: automatednamespaces.analysis.coolscaler.sh
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+spec:
+  group: analysis.coolscaler.sh
+  scope: Cluster
+  conversion:
+    strategy: None
+  names:
+    kind: AutomatedNamespace
+    listKind: AutomatedNamespaceList
+    plural: automatednamespaces
+    singular: automatednamespace
+    shortNames: [ans]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources: {}
+      additionalPrinterColumns:
+        - { name: RightsizePolicy, type: string, jsonPath: .spec.defaultRightsizePolicy, priority: 1, description: "Default rightsize policy" }
+        - { name: RightsizeAuto, type: boolean, jsonPath: .spec.rightsizeOptimize, priority: 1, description: "Rightsize automation enabled" }
+        - { name: ReplicasPolicy, type: string, jsonPath: .spec.defaultReplicasPolicy, priority: 1, description: "Default replicas policy" }
+        - { name: ReplicasAuto, type: boolean, jsonPath: .spec.replicasOptimize, priority: 1, description: "Replicas automation enabled" }
+        - { name: SpotPolicy, type: string, jsonPath: .spec.defaultSpotPolicy, priority: 1, description: "Default spot policy" }
+        - { name: SpotAuto, type: boolean, jsonPath: .spec.spotOptimize, priority: 1, description: "Spot automation enabled" }
+        - { name: GpuPolicy, type: string, jsonPath: .spec.defaultGpuPolicy, priority: 1, description: "Default GPU policy" }
+        - { name: GpuAuto, type: boolean, jsonPath: .spec.gpuOptimize, priority: 1, description: "GPU automation enabled" }
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+              properties:
+                defaultRightsizePolicy: { type: string }
+                rightsizeOptimize: { type: boolean, default: false }
+                defaultReplicasPolicy: { type: string }
+                replicasOptimize: { type: boolean, default: false }
+                defaultSpotPolicy: { type: string }
+                spotOptimize: { type: boolean, default: false }
+                defaultGpuPolicy: { type: string }
+                gpuOptimize: { type: boolean, default: false }
+---
+# GpuPolicy — GPU compute/memory rightsizing: requestsConfigs keyed by gpu-compute / gpu-memory at high
+# percentile + long window.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: gpupolicies.analysis.coolscaler.sh
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+spec:
+  group: analysis.coolscaler.sh
+  scope: Namespaced
+  conversion:
+    strategy: None
+  names: { kind: GpuPolicy, listKind: GpuPolicyList, plural: gpupolicies, singular: gpupolicy, shortNames: [gpupolicy] }
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+              properties:
+                requestsConfigs:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                gpuAutoHealing:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+---
+# GpuMemoryPolicy — GPU-memory recommendation for vLLM workloads (respectPrefixCache).
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: gpumemorypolicies.analysis.coolscaler.sh
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+spec:
+  group: analysis.coolscaler.sh
+  scope: Namespaced
+  conversion:
+    strategy: None
+  names: { kind: GpuMemoryPolicy, listKind: GpuMemoryPolicyList, plural: gpumemorypolicies, singular: gpumemorypolicy, shortNames: [gpumemorypolicy] }
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+              properties:
+                policyOptimize:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+---
+# AutoHealing — OOM/CPU-stress step-up remediation: escalates resources by stepUpMultiplier on observed
+# failures; status records the applied steps.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: autohealings.analysis.coolscaler.sh
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+spec:
+  group: analysis.coolscaler.sh
+  scope: Namespaced
+  conversion:
+    strategy: None
+  names: { kind: AutoHealing, listKind: AutoHealingList, plural: autohealings, singular: autohealing, shortNames: [ah] }
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources: {}
+      additionalPrinterColumns:
+        - { name: Type, type: string, jsonPath: .spec.type, priority: 1 }
+        - { name: ValidUntil, type: string, jsonPath: .status.validUntil, priority: 1, description: "End time for the autohealing" }
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+              properties:
+                type: { type: string }
+                stepUpMultiplier: { type: number, default: 1.2 }
+                targetRef:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                  properties:
+                    kind: { type: string }
+                    name: { type: string }
+                    namespace: { type: string }
+                    apiVersion: { type: string }
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+# DownscaleConfiguration — sleep / scale-to-zero scheduler.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: downscaleconfigurations.analysis.coolscaler.sh
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+spec:
+  group: analysis.coolscaler.sh
+  scope: Namespaced
+  conversion:
+    strategy: None
+  names: { kind: DownscaleConfiguration, listKind: DownscaleConfigurationList, plural: downscaleconfigurations, singular: downscaleconfiguration, shortNames: [downscaleconfig] }
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+              required: ["name"]
+              x-kubernetes-validations:
+                - rule: "!has(self.sleep) || !self.sleep || !has(self.replicas) || self.replicas == 0"
+                  message: "replicas must be 0 when sleep is enabled"
+                - rule: "!has(self.minReplicas) || self.minReplicas >= 1"
+                  message: "minReplicas must be at least 1"
+              properties:
+                name: { type: string }
+                enabled: { type: boolean, default: true }
+                hpaEnabled: { type: boolean, default: true }
+                nonHpaEnabled: { type: boolean, default: true }
+                minReplicas: { type: integer, default: 1 }
+                replicas: { type: integer, default: 1 }
+                sleep: { type: boolean, default: false }
+                schedule:
+                  type: array
+                  items:
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+---
+# CustomOwnerGrouping — identify & aggregate any custom workload type from pod
+# labels/annotations/images/owner/node-size. Built-in groupings (spark, flink,
+# cronjob, daemonsetnodesize, …) and user-created ones both live here.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: customownergroupings.analysis.coolscaler.sh
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+spec:
+  group: analysis.coolscaler.sh
+  scope: Namespaced
+  conversion:
+    strategy: None
+  names: { kind: CustomOwnerGrouping, listKind: CustomOwnerGroupingList, plural: customownergroupings, singular: customownergrouping, shortNames: [cog] }
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+              properties:
+                enabled: { type: boolean, default: true }
+                defaultPolicy: { type: string }
+                defaultAuto: { type: boolean, default: false }
+                weight: { type: integer, default: 0 }
+                recommendationRetentionPeriodMinutes: { type: integer }
+                displayOptions:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                  properties:
+                    hideGeneratedSuffix: { type: boolean, default: false }
+                    fields: { type: array, items: { type: string } }
+                groupBys:
+                  type: array
+                  items:
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                    properties:
+                      labels: { type: array, items: { type: string } }
+                      excludeLabels: { type: array, items: { type: string } }
+                      annotations: { type: array, items: { type: string } }
+                      excludeAnnotations: { type: array, items: { type: string } }
+                      images: { type: array, items: { type: string } }
+                      containerNames: { type: array, items: { type: string } }
+                      nodeSize: { type: boolean }
+                      originResource: { type: boolean }
+                      positiveRegexMatch: { type: boolean }
+                      topOwnerController:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                        properties:
+                          kind: { type: string }
+                          name: { type: string }
+                          apiVersion: { type: string }
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true

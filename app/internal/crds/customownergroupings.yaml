@@ -1,0 +1,68 @@
+# CustomOwnerGrouping — identify & aggregate any custom workload type from pod
+# labels/annotations/images/owner/node-size. Built-in groupings (spark, flink,
+# cronjob, daemonsetnodesize, …) and user-created ones both live here.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: customownergroupings.analysis.coolscaler.sh
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  labels:
+    app.kubernetes.io/name: coolscaler
+    app.kubernetes.io/part-of: coolscaler
+spec:
+  group: analysis.coolscaler.sh
+  scope: Namespaced
+  conversion:
+    strategy: None
+  names: { kind: CustomOwnerGrouping, listKind: CustomOwnerGroupingList, plural: customownergroupings, singular: customownergrouping, shortNames: [cog] }
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+              properties:
+                enabled: { type: boolean, default: true }
+                defaultPolicy: { type: string }
+                defaultAuto: { type: boolean, default: false }
+                weight: { type: integer, default: 0 }
+                recommendationRetentionPeriodMinutes: { type: integer }
+                displayOptions:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                  properties:
+                    hideGeneratedSuffix: { type: boolean, default: false }
+                    fields: { type: array, items: { type: string } }
+                groupBys:
+                  type: array
+                  items:
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                    properties:
+                      labels: { type: array, items: { type: string } }
+                      excludeLabels: { type: array, items: { type: string } }
+                      annotations: { type: array, items: { type: string } }
+                      excludeAnnotations: { type: array, items: { type: string } }
+                      images: { type: array, items: { type: string } }
+                      containerNames: { type: array, items: { type: string } }
+                      nodeSize: { type: boolean }
+                      originResource: { type: boolean }
+                      positiveRegexMatch: { type: boolean }
+                      topOwnerController:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                        properties:
+                          kind: { type: string }
+                          name: { type: string }
+                          apiVersion: { type: string }
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true

@@ -1,0 +1,13 @@
+CoolScaler
+Copyright 2026 Bakmurat Kubanaliev
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This repository contains no third-party source code. The container image built
+by scripts/build.sh or the Dockerfile bundles, at build time, unmodified binaries
+from the following upstream projects, each under the Apache License 2.0:
+  - kube-state-metrics (Kubernetes SIG Instrumentation)
+  - Prometheus (The Prometheus Authors)
+  - prometheus-config-reloader (Prometheus Operator)
+Go and npm dependencies are used under their own licenses; see
+docs/development.md for the recorded license inventory.

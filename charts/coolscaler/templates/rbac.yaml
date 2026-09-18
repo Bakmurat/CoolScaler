@@ -1,0 +1,126 @@
+{{- if .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: coolscaler
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+rules:
+{{- if .Values.rbac.unrestricted }}
+  # Escape hatch (rbac.unrestricted=true): cluster-wide wildcard. Not the default.
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+  - nonResourceURLs: ["*"]
+    verbs: ["*"]
+{{- end }}
+  # ---- Inventory and recommendation inputs (read) ----
+  - apiGroups: [""]
+    resources: ["pods", "pods/status", "nodes", "nodes/status", "namespaces", "services", "endpoints",
+                "replicationcontrollers", "persistentvolumeclaims", "persistentvolumes", "events",
+                "resourcequotas", "limitranges"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes/metrics", "nodes/proxy"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["scheduling.k8s.io"]
+    resources: ["priorityclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.istio.io"]
+    resources: ["virtualservices", "gateways"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods", "nodes"]
+    verbs: ["get", "list"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    resourceNames: ["coolscaler"]
+    verbs: ["get"]
+  # Prometheus service discovery / scraping.
+  - nonResourceURLs: ["/metrics", "/metrics/cadvisor"]
+    verbs: ["get"]
+  # ---- CoolScaler's own state ----
+  # Policies, Recommendations and the other analysis CRs (all verbs, incl. status).
+  - apiGroups: ["analysis.coolscaler.sh"]
+    resources: ["*"]
+    verbs: ["*"]
+  # Runtime ConfigMaps (automation config, cluster operations, dashboards, node
+  # state, headroom) and the webhook TLS Secret live in the release namespace,
+  # but the ClusterRole is cluster-scoped, so these verbs apply cluster-wide.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["mutatingwebhookconfigurations"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  # ---- Applying recommendations (inert while readOnly=true) ----
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["create", "update", "patch", "delete"]   # create/delete: headroom pause Deployments
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]                                 # observability healing (evict a pod)
+  - apiGroups: [""]
+    resources: ["pods/resize"]                        # in-place resize (Kubernetes 1.27+)
+    verbs: ["patch"]
+  - apiGroups: [""]
+    resources: ["pods/eviction"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["patch"]                                  # namespace automation labels
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: ["keda.sh"]
+    resources: ["scaledobjects"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["create", "update", "patch", "delete"]   # Settings > Ingresses
+  - apiGroups: ["networking.istio.io"]
+    resources: ["virtualservices", "gateways"]
+    verbs: ["create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: coolscaler
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: coolscaler
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "coolscaler.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

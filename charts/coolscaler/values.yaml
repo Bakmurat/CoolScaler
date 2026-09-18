@@ -1,0 +1,182 @@
+# CoolScaler — multi-component values.
+
+clusterName: "my-cluster"
+
+# Master safety switch. true = observe & recommend only (nothing is mutated).
+# Default is read-only. Set to false (helm --set readOnly=false) to let the
+# updater apply recommendations and the admission webhook mutate pods in the
+# namespaces you label coolscaler.sh/optimize=true. See docs/security.md.
+readOnly: true
+
+# Shared image — one image, many roles. No public image is published yet: build
+# it with scripts/build.sh or the Dockerfile, push to your registry, and set
+# image.repository / image.tag here.
+image:
+  repository: registry.example.com/coolscaler/coolscaler
+  tag: "1.2.0"
+  pullPolicy: IfNotPresent
+
+
+serviceAccount:
+  name: coolscaler
+
+rbac:
+  create: true
+  # The ClusterRole lists every API group and verb the components use (see
+  # docs/security.md). If a feature hits a permission gap on your cluster, set
+  # unrestricted: true to add a wildcard rule instead of editing the template.
+  unrestricted: false
+
+# Recommendation engine tuning (used by the recommender role).
+engine:
+  sampleIntervalSeconds: 30
+  historyPoints: 1440
+  cpuPercentile: 93
+  memPercentile: 93
+  cpuHeadroom: 1.10
+  memHeadroom: 1.05
+  promWindow: "24h"
+  promStep: "5m"
+
+costModel:
+  # Example prices only. Replace them with your own provider's rates; the
+  # dashboard multiplies requests by these numbers to show cost and savings.
+  cpuCoreMonth: 25.00      # example: $/vCPU-month
+  memGbMonth: 3.50         # example: $/GiB-month
+  gpuHourly: 1.00          # example: $/GPU-hour
+  spotFraction: 0.30       # example: spot price as a fraction of on-demand
+
+# PriorityClasses. CoolScaler's own control-plane pods run at `critical` so the
+# updater/webhook are never the thing that gets evicted while it's right-sizing the cluster.
+priorityClasses:
+  create: true
+  componentClass: coolscaler-critical   # name set on CoolScaler's own pods ("" = none)
+  critical:
+    value: 1000000000
+  overprovisioning:
+    value: -9
+
+java:
+  enabled: false
+  jmxAgentImage: "bitnami/jmx-exporter:1.1.0"
+  observability:
+    enabled: false
+
+# GitOps workload operations ---- Entry format "key=value" (value may be a regex for
+# the exclude lists). Passed to the recommender as the WORKLOAD_AUTOMATION env; the
+# app-managed coolscaler-automation-config CM (edited via Settings/API) overrides these
+# seeds after first save.
+workloadAutomation:
+  excludeTypes: []          # e.g. ["DaemonSet", "StatefulSet"]
+  excludeLabels: []         # e.g. ["team=external"]
+  includeLabels: []         # e.g. ["automate=true"]
+  excludeAnnotations: []    # e.g. ["company.io/manual-scaling=enabled"]
+  includeAnnotations: []    # e.g. ["company.io/optimize=enabled"]
+
+# configParams ---- overrideUserKubeSystemIgnoredNamespace: without this,
+# kube-system stays ignored even if omitted from ignoredNamespaces. Set
+# "true" (alongside an updated ignoredNamespaces list) to allow un-
+# ignoring kube-system (docs).
+configParams:
+  overrideUserKubeSystemIgnoredNamespace: ""
+
+# Namespace automation by label ---- Seeds the coolscaler-custom-namespace-labels CM
+# (rendered only when a list is non-empty, kept on delete so app-side edits survive).
+namespaceAutomation:
+  excludeLabels: []         # e.g. ["env=staging", "team=test-.*"]
+  includeLabels: []         # e.g. ["coolscaler.sh/auto=true"]
+
+# Cluster-wide automation defaults ---- When enabled, seeds the create-only coolscaler-
+# cluster-operations CM (rightsize-optimize / replicas-optimize / default-rightsize-policy /
+# java-observability / java-optimize). Later UI/API edits win.
+clusterAutomation:
+  enabled: false
+  rightsize:
+    optimize: false
+    defaultPolicy: ""
+  replicas:
+    optimize: false
+  java:
+    observability: false
+    optimize: false
+
+# Components
+recommender:
+  replicas: 1
+  # Example sizing for a small cluster. The recommender keeps the chart catalog
+  # and analytics history in memory, so raise the memory limit on larger
+  # clusters rather than let it be OOM-killed.
+  resources: { requests: {cpu: 100m, memory: 256Mi}, limits: {cpu: "4", memory: 2Gi} }
+  # Durable analytics history: persist the snapshot buffer so usage history and the
+  # 14d/30d ranges survive recommender restarts. Requires a default StorageClass.
+  persistence:
+    enabled: true
+    size: 1Gi
+    # storageClass: "" # omit to use the cluster default
+
+dashboards:
+  replicas: 1
+  resources: { requests: {cpu: 25m, memory: 64Mi}, limits: {cpu: 250m, memory: 128Mi} }
+  service:
+    type: NodePort       # ClusterIP | NodePort | LoadBalancer
+    port: 8080
+    nodePort: 30950
+
+agent:
+  enabled: true
+  resources: { requests: {cpu: 10m, memory: 48Mi}, limits: {cpu: 100m, memory: 128Mi} }
+
+updater:
+  enabled: true
+  intervalSeconds: 120
+  resources: { requests: {cpu: 10m, memory: 48Mi}, limits: {cpu: 200m, memory: 128Mi} }
+
+# Mutating admission webhook (injects recommended requests at pod creation).
+# Only acts on namespaces labeled coolscaler.sh/optimize=true, and only when
+# readOnly=false. failurePolicy Ignore = fail-open (never blocks pods).
+admissions:
+  enabled: true
+  resources: { requests: {cpu: 10m, memory: 48Mi}, limits: {cpu: 200m, memory: 128Mi} }
+
+# Bundled metrics backend.
+kubeStateMetrics:
+  enabled: true
+  resources: { requests: {cpu: 10m, memory: 64Mi}, limits: {cpu: 200m, memory: 256Mi} }
+
+prometheus:
+  enabled: true
+  retention: "30d"
+  scrapeInterval: "30s"
+  resources: { requests: {cpu: 50m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi} }
+  # Durable by default so usage history (and the recommendation window) survives a
+  # pod restart
+  storage:
+    size: 10Gi
+    # storageClass: "" # uncomment to pin a class; omit to use the cluster default
+
+# Network observability DaemonSet. this is a lightweight non-privileged stub
+# exposing /metrics.
+networkMonitor:
+  enabled: true
+  resources: { requests: {cpu: 10m, memory: 32Mi}, limits: {cpu: 100m, memory: 64Mi} }
+
+ingress:
+  enabled: false
+  className: ""
+  host: coolscaler.local
+  annotations: {}
+  tls: []
+
+# Istio exposure
+istio:
+  enabled: false
+  host: coolscaler.example.com
+  gatewayNamespace: istio-system
+  gatewaySelector:
+    istio: ingressgateway
+  tlsCredentialName: coolscaler-tls
+  hsts: true
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

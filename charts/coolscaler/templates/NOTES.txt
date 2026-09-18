@@ -1,0 +1,40 @@
+
+  ✦ CoolScaler installed in namespace "{{ .Release.Namespace }}"  ✦
+
+  Cluster : {{ .Values.clusterName }}
+  Mode    : {{ if .Values.readOnly }}READ-ONLY (observe & recommend){{ else }}AUTOMATION ENABLED (can mutate workloads){{ end }}
+
+  Components:
+    • coolscaler-recommender          the right-sizing brain (+ API)
+    • coolscaler-dashboards           web UI (this is what you open)
+    • coolscaler-agent                watches new workloads
+    • coolscaler-updater              reconciles automated workloads
+    • coolscaler-admissions           mutating webhook (opt-in namespaces)
+    • coolscaler-kube-state-metrics   workload metadata
+    • coolscaler-prometheus-server    metrics history (CPU/mem)
+    • coolscaler-network-monitor      per-node DaemonSet
+
+Give Prometheus ~2 minutes to collect history, then open the dashboard:
+{{- if .Values.istio.enabled }}
+
+  ▸ Istio (HTTPS):  https://{{ .Values.istio.host }}
+                    (Gateway in {{ .Values.istio.gatewayNamespace }}, TLS via {{ .Values.istio.tlsCredentialName }}, DNS via external-dns)
+{{- end }}
+
+{{- if eq .Values.dashboards.service.type "NodePort" }}
+
+  ▸ NodePort:      http://<any-node-ip>:{{ .Values.dashboards.service.nodePort }}
+  ▸ Port-forward:  kubectl -n {{ .Release.Namespace }} port-forward svc/coolscaler-dashboards 8088:{{ .Values.dashboards.service.port }}
+                   open http://localhost:8088
+{{- else }}
+
+  ▸ Port-forward:  kubectl -n {{ .Release.Namespace }} port-forward svc/coolscaler-dashboards 8088:{{ .Values.dashboards.service.port }}
+{{- end }}
+
+To enable automation (apply recommendations + admission mutation):
+
+  helm upgrade {{ .Release.Name }} -n {{ .Release.Namespace }} . --reuse-values --set readOnly=false
+
+The admission webhook only touches namespaces you opt in:
+
+  kubectl label ns <your-namespace> coolscaler.sh/optimize=true

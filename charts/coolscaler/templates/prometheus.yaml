@@ -1,0 +1,341 @@
+{{- if .Values.prometheus.enabled -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coolscaler-prometheus-config
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: {{ .Values.prometheus.scrapeInterval }}
+      evaluation_interval: 1m
+    rule_files:
+      - /etc/config/recording_rules.yml
+    scrape_configs:
+      # Container CPU, memory, filesystem, network and pressure counters from
+      # each node's cAdvisor endpoint, reached through the API server proxy.
+      # Only the series the recommender and the dashboards read are kept.
+      - job_name: cadvisor
+        scrape_interval: 20s
+        scrape_timeout: 10s
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+          - source_labels: [__meta_kubernetes_node_name]
+            action: replace
+            target_label: node
+          - target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            regex: (.+)
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
+        metric_relabel_configs:
+          - action: keep
+            source_labels: [__name__]
+            regex: (container_cpu_usage_seconds_total|container_memory_working_set_bytes|container_cpu_cfs_periods_total|container_cpu_cfs_throttled_periods_total|container_fs_usage_bytes|container_fs_limit_bytes|container_fs_reads_bytes_total|container_fs_writes_bytes_total|container_fs_reads_total|container_fs_writes_total|container_oom_events_total|container_network_receive_bytes_total|container_network_transmit_bytes_total|container_network_receive_packets_dropped_total|container_network_transmit_packets_dropped_total|container_pressure_cpu_waiting_seconds_total|container_pressure_memory_waiting_seconds_total|container_pressure_io_waiting_seconds_total|machine_cpu_cores|machine_memory_bytes)
+      # Kubelet metrics: persistent-volume usage for the node and volume views,
+      # and probe counters for the workload troubleshooting tab.
+      - job_name: kubelet
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_node_name]
+            action: replace
+            target_label: node
+          - target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            regex: (.+)
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/${1}/proxy/metrics
+        metric_relabel_configs:
+          - action: keep
+            source_labels: [__name__]
+            regex: (kubelet_volume_stats_used_bytes|kubelet_volume_stats_capacity_bytes|kubelet_volume_stats_available_bytes|prober_probe_total)
+      # Workload and node metadata from the bundled kube-state-metrics. The list
+      # is the set of kube_* series the engine and the recording rules use.
+      - job_name: kube-state-metrics
+        static_configs:
+          - targets: ["coolscaler-kube-state-metrics:8080"]
+        metric_relabel_configs:
+          - action: keep
+            source_labels: [__name__]
+            regex: (kube_pod_info|kube_pod_labels|kube_pod_status_phase|kube_pod_status_reason|kube_pod_container_info|kube_pod_init_container_info|kube_pod_container_resource_requests|kube_pod_container_resource_limits|kube_pod_init_container_resource_requests|kube_pod_container_status_restarts_total|kube_pod_container_status_terminated_reason|kube_pod_container_status_last_terminated_exitcode|kube_node_info|kube_node_labels|kube_node_status_allocatable|kube_node_status_capacity|kube_node_status_condition|kube_deployment_status_replicas|kube_deployment_status_replicas_unavailable|kube_horizontalpodautoscaler_spec_target_metric|kube_horizontalpodautoscaler_status_current_replicas|kube_horizontalpodautoscaler_status_target_metric|kube_resourcequota)
+          - action: labeldrop
+            regex: instance
+      # The recommender's own exposition: per-node cost gauges and the
+      # coolscaler_recommendation_* families the recording rules build on.
+      - job_name: coolscaler-recommender
+        static_configs:
+          - targets: ["coolscaler-recommender:8080"]
+        metric_relabel_configs:
+          - action: labeldrop
+            regex: instance
+      # Every CoolScaler pod that opts in with prometheus.io/scrape=true.
+      - job_name: coolscaler-components
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: ["{{ .Release.Namespace }}"]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          # Honor prometheus.io/port so multi-port pods (admissions 8443+8080)
+          # are scraped once, on the metrics port, not on the TLS webhook port.
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            regex: (.+)
+            target_label: __metrics_path__
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+            action: replace
+            target_label: component
+      # Node load and pressure gauges from the network-monitor DaemonSet, which
+      # announces itself with coolscaler.prometheus.io/* annotations.
+      - job_name: coolscaler-network-monitor
+        scrape_interval: 20s
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: ["{{ .Release.Namespace }}"]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_coolscaler_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_coolscaler_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_pod_annotation_coolscaler_prometheus_io_path]
+            action: replace
+            regex: (.+)
+            target_label: __metrics_path__
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            action: replace
+            target_label: node
+      # Prometheus itself, for the storage figures shown on the Settings page.
+      - job_name: prometheus
+        static_configs:
+          - targets: ["localhost:9090"]
+      # JMX exporter agents injected into Java pods (any namespace). The
+      # namespace and pod labels let the recommender map JVM series to workloads.
+      - job_name: coolscaler-jmx
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_coolscaler_sh_jmx_injected]
+            action: keep
+            regex: "true"
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: pod
+  # Recording rules. Only the series the dashboards query are precomputed;
+  # everything else is evaluated ad hoc by the recommender. Owner attribution
+  # (owner_type / owner_name) comes from the recommender's own
+  # coolscaler_recommendation_pod_owner_recommendation_v2 gauge, one row per
+  # active pod.
+  recording_rules.yml: |
+    groups:
+      - name: coolscaler_pods
+        interval: 1m
+        rules:
+          # Pods that consume resources: scheduled and not finished.
+          - record: coolscaler_active_pods
+            expr: max by (namespace, pod, node) (kube_pod_info{node!=""}) and on (namespace, pod) (max by (namespace, pod) (kube_pod_status_phase{phase=~"Running|Pending|Unknown"}) == 1)
+          # Active pods the webhook marked as unevictable.
+          - record: coolscaler_active_unevictable_pod_info
+            expr: max by (namespace, pod) (kube_pod_labels{label_coolscaler_sh_managed_unevictable="true"}) and on (namespace, pod) coolscaler_active_pods
+          # Per-container requests with the owning workload attached.
+          - record: coolscaler_pod_container_resource_requests
+            expr: max by (namespace, pod, container, node, resource) (kube_pod_container_resource_requests{resource=~"cpu|memory"}) * on (namespace, pod) group_left (owner_type, owner_name) topk by (namespace, pod) (1, max by (namespace, pod, owner_type, owner_name) (coolscaler_recommendation_pod_owner_recommendation_v2))
+          # The current recommendation fanned out to each running container.
+          # CPU is in millicores, memory and ephemeral storage in bytes.
+          - record: coolscaler_pod_container_resource_recommendation_requests
+            expr: label_replace((max by (namespace, pod, container, owner_type, owner_name) (coolscaler_pod_container_resource_requests{resource="cpu"}) * 0 + 1) * on (namespace, owner_type, owner_name, container) group_left () max by (namespace, owner_type, owner_name, container) (coolscaler_recommendation_container_recommended_cpu_requests_mili_cores), "resource", "cpu", "job", ".*") or label_replace((max by (namespace, pod, container, owner_type, owner_name) (coolscaler_pod_container_resource_requests{resource="memory"}) * 0 + 1) * on (namespace, owner_type, owner_name, container) group_left () max by (namespace, owner_type, owner_name, container) (coolscaler_recommendation_container_recommended_memory_requests_bytes), "resource", "memory", "job", ".*")
+          - record: coolscaler_pod_count_per_node
+            expr: count by (node) (coolscaler_active_pods)
+          - record: coolscaler_node_cpu_request
+            expr: sum by (node) (max by (namespace, pod, container, node) (kube_pod_container_resource_requests{resource="cpu"}) and on (namespace, pod) coolscaler_active_pods)
+          - record: coolscaler_node_memory_request
+            expr: sum by (node) (max by (namespace, pod, container, node) (kube_pod_container_resource_requests{resource="memory"}) and on (namespace, pod) coolscaler_active_pods)
+      - name: coolscaler_cluster
+        interval: 3m
+        rules:
+          - record: coolscaler_sum_cpu_kube_node_status_allocatable
+            expr: sum(max by (node) (kube_node_status_allocatable{resource="cpu"}) and on (node) (max by (node) (kube_node_status_condition{condition="Ready",status="true"}) == 1))
+          - record: coolscaler_sum_memory_kube_node_status_allocatable
+            expr: sum(max by (node) (kube_node_status_allocatable{resource="memory"}) and on (node) (max by (node) (kube_node_status_condition{condition="Ready",status="true"}) == 1))
+          - record: coolscaler_sum_pods_count
+            expr: count(max by (namespace, pod) (kube_pod_status_phase{phase=~"Running|Pending|Unknown"}) == 1)
+          # Pods carrying the webhook's coolscaler.sh/managed=true label.
+          - record: coolscaler_sum_automated_pods_count
+            expr: count(max by (namespace, pod) (kube_pod_labels{label_coolscaler_sh_managed="true"}) and on (namespace, pod) (max by (namespace, pod) (kube_pod_status_phase{phase=~"Running|Pending|Unknown"}) == 1))
+          - record: coolscaler_total_automated_workloads
+            expr: count(max by (namespace, owner_type, owner_name) (coolscaler_recommendation_managed_workload_status{namespace!="kube-system",owner_name!~"coolscaler-.*"}) == 1) or vector(0)
+          - record: coolscaler_total_unautomated_workloads
+            expr: count(max by (namespace, owner_type, owner_name) (coolscaler_recommendation_managed_workload_status{namespace!="kube-system",owner_name!~"coolscaler-.*"}) == 0) or vector(0)
+          - record: coolscaler_oom_limit_events_by_workload
+            expr: sum by (namespace, owner_type, owner_name) (coolscaler_recommendation_container_oom_event_count{cause="OOMKilled"})
+          - record: coolscaler_oom_node_events_by_workload
+            expr: sum by (namespace, owner_type, owner_name) (coolscaler_recommendation_container_oom_event_count{cause=~"NodeMemoryPressure|TerminationByKubelet"})
+      - name: coolscaler_cost
+        interval: 5m
+        rules:
+          # Hourly cost of what each workload requests, priced with the
+          # recommender's per-node hourly rates (memory in GiB, CPU in cores).
+          - record: coolscaler_owner_hourly_cost_avg_1h
+            expr: avg_over_time((sum by (namespace, owner_type, owner_name, resource) ((coolscaler_pod_container_resource_requests{resource="memory"} / 1073741824 or coolscaler_pod_container_resource_requests{resource="cpu"}) * on (node, resource) group_left () max by (node, resource) (coolscaler_node_hourly_cost)))[1h:10m])
+          # Hourly cost of the gap between requests and the recommendation.
+          - record: coolscaler_owner_hourly_available_savings_cost_avg_1h
+            expr: avg_over_time((sum by (namespace, owner_type, owner_name, resource) (((sum by (namespace, owner_type, owner_name, pod, node, resource) (coolscaler_pod_container_resource_requests{resource="memory"}) - on (namespace, owner_type, owner_name, pod) group_left () sum by (namespace, owner_type, owner_name, pod) (coolscaler_pod_container_resource_recommendation_requests{resource="memory"})) / 1073741824 or (sum by (namespace, owner_type, owner_name, pod, node, resource) (coolscaler_pod_container_resource_requests{resource="cpu"}) - on (namespace, owner_type, owner_name, pod) group_left () sum by (namespace, owner_type, owner_name, pod) (coolscaler_pod_container_resource_recommendation_requests{resource="cpu"}) / 1000)) * on (node, resource) group_left () max by (node, resource) (coolscaler_node_hourly_cost)))[1h:10m])
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coolscaler-prometheus-server
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus-server
+spec:
+  replicas: 1
+  # Recreate (not RollingUpdate): the data PVC is ReadWriteOnce, so the new pod
+  # can't attach the volume until the old pod is gone — RollingUpdate deadlocks
+  # with a Multi-Attach error. Recreate terminates the old pod first.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "coolscaler.selector" (dict "ctx" . "component" "prometheus-server") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "coolscaler.selector" (dict "ctx" . "component" "prometheus-server") | nindent 8 }}
+        {{- include "coolscaler.managedUnevictableLabels" . | nindent 8 }}
+      annotations:
+        # Hash a config-revision token alongside scrapeInterval so changes to the
+        # scrape_configs/relabel_configs above force a Prometheus pod reload. Bump the
+        # token whenever the inline prometheus.yml changes.
+        checksum/config: {{ cat .Values.prometheus.scrapeInterval "rev9-exitcodes" | sha256sum }}
+        kubectl.kubernetes.io/default-container: prometheus-server
+        {{- include "coolscaler.managedUnevictableAnnotations" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "coolscaler.serviceAccountName" . }}
+      {{- include "coolscaler.priorityClassName" $ | nindent 6 }}
+      {{- include "coolscaler.managedUnevictable" . | nindent 6 }}
+      securityContext: { runAsNonRoot: true, runAsUser: 65534, fsGroup: 65534 }
+      terminationGracePeriodSeconds: 300
+      containers:
+        # Config-reloader sidecar
+        - name: prometheus-server-configmap-reload
+          image: {{ include "coolscaler.image" . }}
+          command: ["/bin/prometheus-config-reloader"]
+          args:
+            - --watched-dir=/etc/config
+            - --reload-url=http://127.0.0.1:9090/-/reload
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef: { fieldPath: metadata.namespace }
+          livenessProbe:
+            exec: { command: ["ls"] }
+            failureThreshold: 8
+            periodSeconds: 10
+            timeoutSeconds: 15
+          readinessProbe:
+            exec: { command: ["ls"] }
+            failureThreshold: 3
+            periodSeconds: 10
+            timeoutSeconds: 15
+          resources:
+            requests: { cpu: 10m, memory: 10Mi }
+            limits: { cpu: "1", memory: 1Gi }
+          volumeMounts:
+            - { name: config, mountPath: /etc/config, readOnly: true }
+        - name: prometheus-server
+          # Bundled /bin/prometheus (v2.48.1) from the coolscaler image — like
+          # single-binary, which ships Prometheus inside the same multi-call image.
+          image: {{ include "coolscaler.image" . }}
+          command: ["/bin/prometheus"]
+          args:
+            - --config.file=/etc/config/prometheus.yml
+            - --storage.tsdb.path=/data
+            - --storage.tsdb.retention.time={{ .Values.prometheus.retention }}
+            - --web.console.libraries=/etc/prometheus/console_libraries
+            - --web.console.templates=/etc/prometheus/consoles
+            - --web.enable-lifecycle
+            - --web.enable-admin-api
+          ports: [{ name: http, containerPort: 9090 }]
+          livenessProbe: { httpGet: { path: /-/healthy, port: http }, failureThreshold: 8, periodSeconds: 10, timeoutSeconds: 15 }
+          readinessProbe: { httpGet: { path: /-/ready, port: http }, initialDelaySeconds: 10, periodSeconds: 10, failureThreshold: 3, timeoutSeconds: 15 }
+          resources: {{- toYaml .Values.prometheus.resources | nindent 12 }}
+          volumeMounts:
+            - { name: config, mountPath: /etc/config }
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: config
+          configMap: { name: coolscaler-prometheus-config }
+        - name: data
+          {{- if .Values.prometheus.storage.size }}
+          persistentVolumeClaim: { claimName: coolscaler-prometheus-data }
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- if .Values.prometheus.storage.size }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: coolscaler-prometheus-data
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.prometheus.storage.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.prometheus.storage.size }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: coolscaler-prometheus-server
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+    app.kubernetes.io/component: prometheus-server
+spec:
+  selector:
+    {{- include "coolscaler.selector" (dict "ctx" . "component" "prometheus-server") | nindent 4 }}
+  ports:
+    - { name: http, port: 80, targetPort: http }
+{{- end }}

@@ -1,0 +1,62 @@
+{{- if .Values.istio.enabled -}}
+# port 80 redirects to HTTPS.
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: coolscaler-gateway
+  namespace: {{ .Values.istio.gatewayNamespace }}
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+  annotations:
+    # external-dns publishes this host.
+    external-dns.alpha.kubernetes.io/hostname: {{ .Values.istio.host | quote }}
+spec:
+  selector:
+    {{- toYaml .Values.istio.gatewaySelector | nindent 4 }}
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - {{ .Values.istio.host | quote }}
+      tls:
+        httpsRedirect: true
+    - port:
+        number: 443
+        name: https
+        protocol: HTTPS
+      hosts:
+        - {{ .Values.istio.host | quote }}
+      tls:
+        mode: SIMPLE
+        credentialName: {{ .Values.istio.tlsCredentialName }}
+---
+# VirtualService routes the host to the dashboards Service.
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: coolscaler-vs
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+spec:
+  hosts:
+    - {{ .Values.istio.host | quote }}
+  gateways:
+    - {{ .Values.istio.gatewayNamespace }}/coolscaler-gateway
+  http:
+    - match:
+        - uri:
+            prefix: /
+      {{- if .Values.istio.hsts }}
+      headers:
+        response:
+          set:
+            Strict-Transport-Security: "max-age=31536000; includeSubDomains"
+      {{- end }}
+      route:
+        - destination:
+            host: coolscaler-dashboards
+            port:
+              number: {{ .Values.dashboards.service.port }}
+{{- end }}

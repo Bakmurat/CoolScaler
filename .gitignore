@@ -1,0 +1,17 @@
+# Go build artifacts
+/coolscaler
+app/dist/
+*.test
+*.tmp
+
+# Frontend
+app/web/node_modules/
+app/web/build/
+app/web/dist/
+npm-debug.log*
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.local

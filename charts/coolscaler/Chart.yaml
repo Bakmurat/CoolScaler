@@ -1,0 +1,14 @@
+apiVersion: v2
+name: coolscaler
+description: CoolScaler — an open-source Kubernetes workload right-sizing and cost-optimization platform. Installs in read-only mode.
+type: application
+version: 1.2.0
+appVersion: "1.2.0"
+keywords:
+  - rightsizing
+  - cost-optimization
+  - finops
+  - autoscaling
+home: https://github.com/Bakmurat/coolscaler
+maintainers:
+  - name: Bakmurat Kubanaliev

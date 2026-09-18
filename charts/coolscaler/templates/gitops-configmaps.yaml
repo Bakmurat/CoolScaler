@@ -1,0 +1,54 @@
+{{- /*
+GitOps seed ConfigMaps. Both are seeds the app later owns and edits through the
+Settings UI and API, so:
+  - custom-namespace-labels renders only when a values list is non-empty and is
+    kept on delete;
+  - cluster-operations is create-only (lookup guard) so `helm upgrade` never
+    clobbers UI-side edits.
+*/ -}}
+{{- if or .Values.namespaceAutomation.excludeLabels .Values.namespaceAutomation.includeLabels }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coolscaler-custom-namespace-labels
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: coolscaler
+  annotations:
+    helm.sh/resource-policy: keep
+data:
+  default-auto: "[]"
+  default-auto-regex: "[]"
+  exclude-automation: "[]"
+  exclude-automation-regex: "[]"
+  exclude-labels: {{ toJson .Values.namespaceAutomation.excludeLabels | quote }}
+  exclude-namespaces-regex: "[]"
+  include-labels: {{ toJson .Values.namespaceAutomation.includeLabels | quote }}
+  include-namespaces-regex: "[]"
+{{- end }}
+{{- if or .Values.clusterAutomation.enabled .Values.java.observability.enabled }}
+{{- if not (lookup "v1" "ConfigMap" .Release.Namespace "coolscaler-cluster-operations") }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coolscaler-cluster-operations
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: coolscaler
+  annotations:
+    helm.sh/resource-policy: keep
+data:
+  {{- if .Values.clusterAutomation.enabled }}
+  {{- with .Values.clusterAutomation.rightsize }}
+  rightsize-optimize: {{ .optimize | toString | quote }}
+  {{- if .defaultPolicy }}
+  default-rightsize-policy: {{ .defaultPolicy | quote }}
+  {{- end }}
+  {{- end }}
+  replicas-optimize: {{ .Values.clusterAutomation.replicas.optimize | toString | quote }}
+  java-optimize: {{ .Values.clusterAutomation.java.optimize | toString | quote }}
+  {{- end }}
+  java-observability: {{ or .Values.java.observability.enabled (and .Values.clusterAutomation.enabled .Values.clusterAutomation.java.observability) | toString | quote }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,56 @@
+{{- if .Values.kubeStateMetrics.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coolscaler-kube-state-metrics
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kube-state-metrics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "coolscaler.selector" (dict "ctx" . "component" "kube-state-metrics") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "coolscaler.selector" (dict "ctx" . "component" "kube-state-metrics") | nindent 8 }}
+        {{- include "coolscaler.managedUnevictableLabels" . | nindent 8 }}
+      annotations:
+        {{- include "coolscaler.managedUnevictableAnnotations" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "coolscaler.serviceAccountName" . }}
+      {{- include "coolscaler.priorityClassName" $ | nindent 6 }}
+      {{- include "coolscaler.managedUnevictable" . | nindent 6 }}
+      securityContext: { runAsNonRoot: true, runAsUser: 65534 }
+      containers:
+        - name: kube-state-metrics
+          # Bundled binary from the coolscaler image — like single-binary, which ships
+          # /kube-state-metrics inside the same multi-call image.
+          image: {{ include "coolscaler.image" . }}
+          command: ["/kube-state-metrics"]
+          args:
+            - --port=8080
+            - --telemetry-port=8081
+            - --resources=horizontalpodautoscalers,jobs,limitranges,namespaces,nodes,pods,replicasets,replicationcontrollers,resourcequotas,statefulsets,cronjobs,daemonsets,deployments,persistentvolumeclaims,persistentvolumes,poddisruptionbudgets,storageclasses
+            - --metric-labels-allowlist=nodes=[*],pods=[*]
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: telemetry, containerPort: 8081 }
+          livenessProbe: { httpGet: { path: /healthz, port: 8080 }, failureThreshold: 8, initialDelaySeconds: 5 }
+          readinessProbe: { httpGet: { path: /, port: 8080 }, initialDelaySeconds: 5 }
+          resources: {{- toYaml .Values.kubeStateMetrics.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: coolscaler-kube-state-metrics
+  labels:
+    {{- include "coolscaler.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kube-state-metrics
+spec:
+  selector:
+    {{- include "coolscaler.selector" (dict "ctx" . "component" "kube-state-metrics") | nindent 4 }}
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+{{- end }}

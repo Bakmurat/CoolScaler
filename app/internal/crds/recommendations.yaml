@@ -1,0 +1,58 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: recommendations.analysis.coolscaler.sh
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  labels:
+    app.kubernetes.io/name: coolscaler
+    app.kubernetes.io/part-of: coolscaler
+spec:
+  group: analysis.coolscaler.sh
+  scope: Namespaced
+  conversion:
+    strategy: None
+  names:
+    kind: Recommendation
+    listKind: RecommendationList
+    plural: recommendations
+    singular: recommendation
+    shortNames: ["recommend"]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources: {}
+      additionalPrinterColumns:
+        - { name: Policy, type: string, jsonPath: .spec.policyName, priority: 1, description: "Rightsize policy name" }
+        - { name: Auto, type: boolean, jsonPath: .spec.optimize, priority: 1, description: "Rightsize automation enabled" }
+        - { name: ReplicasPolicy, type: string, jsonPath: .spec.hpaPolicyName, priority: 1, description: "Scale-out policy name" }
+        - { name: ReplicasAuto, type: boolean, jsonPath: .spec.scaleOutOptimize, priority: 1, description: "Scale-out automation enabled" }
+        - { name: GpuPolicy, type: string, jsonPath: .spec.gpuPolicyName, priority: 1, description: "GPU policy name" }
+        - { name: GpuMemoryPolicy, type: string, jsonPath: .spec.gpuMemoryPolicyName, priority: 1, description: "GPU memory policy name" }
+        - { name: GpuAuto, type: boolean, jsonPath: .spec.gpuOptimize, priority: 1, description: "GPU automation enabled" }
+        - { name: SpotPolicy, type: string, jsonPath: .spec.spotOptimizationPolicy, priority: 1, description: "Spot optimization policy name" }
+        - { name: SpotAuto, type: boolean, jsonPath: .spec.spotOptimizationOptimize, priority: 1, description: "Spot automation enabled" }
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+              required: ["automationExcluded", "targetRef"]
+              properties:
+                targetRef:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                  properties:
+                    kind: { type: string }
+                    name: { type: string }
+                    namespace: { type: string }
+                    apiVersion: { type: string }
+                policyName: { type: string }
+                optimize: { type: boolean, default: false }
+                automationExcluded: { type: boolean, default: false }
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
