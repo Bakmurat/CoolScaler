@@ -1,43 +1,41 @@
 # CoolScaler
 
-CoolScaler is an open-source Kubernetes workload right-sizing and cost-optimization
-platform. It watches what every Deployment, StatefulSet and DaemonSet actually uses,
-recommends CPU and memory requests that fit, prices the gap between requests and
-usage, and, only when you switch it on, applies the recommendations for you. It ships
-as one container image with a small set of cooperating components and a web dashboard.
+**Stop paying for Kubernetes capacity you never use.**
 
-CoolScaler is inspired by commercial Kubernetes right-sizing products. It is a
-personal project by its sole author, [Bakmurat Kubanaliev](https://github.com/Bakmurat),
-and is released under the Apache License 2.0.
+CoolScaler is an open-source Kubernetes workload right-sizing and cost-optimization platform. Resource requests
+are set once, by guess, and then never revisited, so most clusters run at a fraction of what they reserve while the
+bill reflects the reservation. CoolScaler measures what every Deployment, StatefulSet, and DaemonSet actually uses,
+recommends CPU and memory requests that fit with statistical headroom, prices the gap between requests and usage in
+your own cost model, and, only when you switch it on, applies the recommendations for you, safely, at the moment
+pods are created. One container image, a handful of cooperating components, and a full web dashboard.
 
-## Status
+Personal project by its sole author, [Bakmurat Kubanaliev](https://github.com/Bakmurat); inspired by commercial
+Kubernetes right-sizing products; released under the Apache License 2.0.
 
-- Working: it runs end to end in the author's own Kubernetes environment (RKE2 on
-  Harvester), where the recommender, updater, admission webhook and dashboard have
-  been exercised against real workloads.
-- Not production-hardened: there has been no multi-cluster, large-cluster, or
-  long-duration operation, no security audit, and no third-party review.
-- No prebuilt image is published yet. Build your own (below) and point the chart at
-  your registry.
-- Installs in read-only mode. Nothing is mutated until you set `readOnly=false`.
+## Why it matters
 
-## What it does
+- **Right-sizing is the largest untouched lever in most clusters.** Requests drive scheduling and node count; every
+  over-request is capacity you pay for and cannot use.
+- **Recommendations nobody applies are worthless.** CoolScaler closes the loop: an updater patches automated
+  workloads and a mutating admission webhook injects the right requests into new pods, so the fix lands without a
+  ticket.
+- **Automation must be earned.** Everything installs read-only. Mutation is opt-in per namespace, the updater is
+  leader-elected, RBAC is explicit, and every change is recorded in the audit view.
+- **Cost is a first-class signal.** Recommendations carry a price, so teams see the money, not just the millicores.
 
-- Discovers workloads by walking pod `ownerReferences`.
-- Measures usage from the bundled Prometheus (cAdvisor and kube-state-metrics
-  scrapes) and from `metrics.k8s.io`.
-- Recommends requests at a configurable percentile plus headroom over a
-  configurable history window (defaults: P93 CPU and memory, +10% CPU, +5%
-  memory, 24 hours).
-- Prices the request-versus-recommendation gap with a configurable cost model.
-- Stores its state as Kubernetes custom resources (`Policy`, `Recommendation`,
-  `HpaPolicy`, `DownscalerPolicy`, ... under `analysis.coolscaler.sh/v1alpha1`).
-- Optionally applies: an updater patches automated workloads, and a mutating
-  admission webhook injects recommended requests into pods at creation time, in
-  namespaces you opt in with the label `coolscaler.sh/optimize=true`.
-- Shows it all in a React dashboard: savings, right-sizing, replicas, scheduling,
-  node management, cluster headroom, Java (JVM) observability, cost reports,
-  alerts and audit events.
+## Capabilities
+
+| Capability | What it delivers |
+|---|---|
+| **Workload discovery** | Walks pod `ownerReferences` to find every Deployment, StatefulSet, DaemonSet, and their HPAs and KEDA ScaledObjects. |
+| **Usage measurement** | Bundled Prometheus (cAdvisor and kube-state-metrics) with 30-day retention by default, plus `metrics.k8s.io` for live values. |
+| **Percentile recommendations** | Requests sized at a configurable percentile plus headroom over a configurable window (defaults: P93, +10% CPU, +5% memory, 24 hours). |
+| **Cost model** | Prices the request-versus-recommendation gap; per-cluster pricing you control. |
+| **Policies as CRDs** | `Policy`, `Recommendation`, `HpaPolicy`, `DownscalerPolicy` and more under `analysis.coolscaler.sh/v1alpha1`; built-in policy catalog, custom policies. |
+| **Safe automation** | Updater for automated workloads; mutating admission webhook for pods, HPAs, and KEDA ScaledObjects in namespaces labeled `coolscaler.sh/optimize=true`. |
+| **Replica and schedule optimization** | HPA policy tuning and time-based downscaling of non-production environments. |
+| **Dashboard** | Savings, right-sizing, replicas, scheduling, node management, cluster headroom, JVM observability, cost reports, alerts, and audit events. |
+| **Security posture** | Read-only by default, explicit RBAC rules derived from the API paths the code calls, documented webhook failure policy. |
 
 ## Components
 
@@ -89,17 +87,20 @@ kubectl label namespace <your-namespace> coolscaler.sh/optimize=true
 - [docs/security.md](docs/security.md): read-only mode, RBAC scope, the admission webhook's failure policy, what to review before enabling automation.
 - [docs/development.md](docs/development.md): building, running locally, tests, dependency licenses.
 
-## Limitations
+## Status
 
-- The network monitor is a stub; there is no eBPF or L7 traffic observability, so
-  network-cost and API-latency views show what the stub can see, which is little.
-- Node pool automation for cloud autoscalers (Karpenter, cluster autoscaler node
-  pools) is not implemented.
-- Tested only on small clusters. Expect rough edges on large ones.
-- The Go packages have unit tests, the web app has none, and `scripts/test.sh` is
-  a smoke suite that needs a live installation.
-- No figures about savings are claimed anywhere in this repository; what the
-  dashboard shows is computed from your own cluster and your own cost model.
+CoolScaler is an actively developed personal project. It runs end to end in the author's own Kubernetes
+environment (RKE2 on Harvester), where the recommender, updater, admission webhook, and dashboard operate against
+real workloads. No prebuilt image is published yet: build your own and point the chart at your registry. No savings
+figures are claimed in this repository; what the dashboard shows is computed from your cluster and your cost model.
+
+## Roadmap
+
+1. Prebuilt, signed container images and a published Helm repository.
+2. eBPF-based network and L7 observability to replace the network-monitor stub.
+3. Node-pool automation for Karpenter and Cluster Autoscaler node groups.
+4. Large-cluster and long-duration benchmarks; web-app test suite.
+5. Independent security review before automation is recommended for regulated environments.
 
 ## License
 
